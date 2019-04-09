@@ -2,7 +2,7 @@
  * Name  : Prabesh Khadka
  * UTA ID: 1001201007
  *
- *
+ *new
  * CSE4342 Embedded Systems II
  * Spring 2019 Project
  *
@@ -325,7 +325,6 @@ void toString(char str[], uint16_t num)
     {
         str[len]=0+'0';
         len++;
-        
     }
     while (n != 0)
     {
@@ -378,21 +377,29 @@ void timer1Isr()
         //putsUart0("the second timer fired\n");
         //
         TIMER1_CTL_R &= ~TIMER_CTL_TAEN;                 // turn-off timer before reconfiguring
-        
+        //UART1_IM_R = UART_IM_TXIM;
+        //TIMER1_ICR_R = TIMER_ICR_TATOCINT;
         UART1_IM_R = UART_RIS_TXRIS;
-        
+        //while (UART1_FR_R & UART_FR_TXFF);
         while (UART1_FR_R & UART_FR_TXFF);
         UART1_DR_R = 0;
+        //initTimer1();
         
+        // TIMER1_ICR_R = TIMER_ICR_TATOCINT;
+        //  phase = 2;
+        // initTimer1();
+        // while (UART1_FR_R & UART_FR_TXFF);
         
     }
     TIMER1_ICR_R = TIMER_ICR_TATOCINT;
 }
 void uart1Isr()
 {
-    
+    //putsUart0("ISR 1 FIRED");
     if ((phase-2)<maxM)
     {
+        //        while (UART1_FR_R & UART_FR_TXFF);
+        //putsUart0("ISR 1 FIRED\n");
         UART1_DR_R = dmxData[phase-2];
         phase++;
         UART1_ICR_R = UART_ICR_TXIC;
