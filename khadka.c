@@ -37,11 +37,13 @@
 
 #define RED_LED      (*((volatile uint32_t *)(0x42000000 + (0x400253FC-0x40000000)*32 + 1*4)))
 #define GREEN_LED    (*((volatile uint32_t *)(0x42000000 + (0x400253FC-0x40000000)*32 + 3*4)))
+#define BLUE_LED     (*((volatile uint32_t *)(0x42000000 + (0x400253FC-0x40000000)*32 + 2*4)))
 #define PIN_U1RX     (*((volatile uint32_t *)(0x42000000 + (0x400063FC-0x40000000)*32 + 4*4)))
 #define PIN_U1TX     (*((volatile uint32_t *)(0x42000000 + (0x400063FC-0x40000000)*32 + 5*4)))
 #define PIN_DEN      (*((volatile uint32_t *)(0x42000000 + (0x400063FC-0x40000000)*32 + 6*4)))
 
 #define GREEN_LED_MASK 8
+#define BLUE_LED_MASK 4
 #define RED_LED_MASK 2
 #define MAX_CHAR 80        //define max character allowed for the commands
 #define delay4Cycles() __asm(" NOP\n NOP\n NOP\n NOP")
@@ -73,6 +75,8 @@ uint8_t MODE= 1;              //define a global variable for controller mode (0:
 uint16_t phase;
 uint16_t rxPhase;
 uint16_t glob=0;
+uint16_t timeout;
+uint16_t timeout1=1000;
 //-----------------------------------------------------------------------------
 // Subroutines
 //-----------------------------------------------------------------------------
@@ -92,9 +96,9 @@ void initHw()
     SYSCTL_RCGC2_R = SYSCTL_RCGC2_GPIOA | SYSCTL_RCGC2_GPIOF | SYSCTL_RCGC2_GPIOC;
     
     // Configure LED pins
-    GPIO_PORTF_DIR_R = GREEN_LED_MASK | RED_LED_MASK;  // bits 1 and 3 are outputs
-    GPIO_PORTF_DR2R_R = GREEN_LED_MASK | RED_LED_MASK; // set drive strength to 2mA (not needed since default configuration -- for clarity)
-    GPIO_PORTF_DEN_R = GREEN_LED_MASK | RED_LED_MASK;  // enable LEDs
+    GPIO_PORTF_DIR_R = GREEN_LED_MASK | RED_LED_MASK |BLUE_LED_MASK;  // bits 1 and 3 are outputs
+    GPIO_PORTF_DR2R_R = GREEN_LED_MASK | RED_LED_MASK|BLUE_LED_MASK; // set drive strength to 2mA (not needed since default configuration -- for clarity)
+    GPIO_PORTF_DEN_R = GREEN_LED_MASK | RED_LED_MASK |BLUE_LED_MASK;  // enable LEDs
     
     // Configure UART0 pins
     GPIO_PORTA_DIR_R |= 2;                           // enable output on UART0 TX pin: default, added for clarity
@@ -121,7 +125,7 @@ void initHw()
     GPIO_PORTC_DEN_R |= 0x70;                        //set digital enable on bits 5 and 6 //drives zero by default
     SYSCTL_RCGCUART_R |= SYSCTL_RCGCUART_R1;         // turn-on UART1, leave other UARTs in same status
     GPIO_PORTC_PCTL_R |= GPIO_PCTL_PC5_U1TX | GPIO_PCTL_PC4_U1RX;
-    SYSCTL_RCGCTIMER_R |= SYSCTL_RCGCTIMER_R1;       // turn-on timer
+    SYSCTL_RCGCTIMER_R |= SYSCTL_RCGCTIMER_R1 | SYSCTL_RCGCTIMER_R0;       // turn-on timer
     
 }
 
@@ -141,7 +145,7 @@ void initUart1RX()
     UART1_CTL_R = UART_CTL_RXE | UART_CTL_UARTEN;//| UART_CTL_EOT; // enable TX, RX, and module and end of transmission
     UART1_IM_R = UART_IM_RXIM;
     NVIC_EN0_R |= 1 << (INT_UART1-16);               // turn-on interrupt 22 (UART0)
-    
+    timeout1=40;
     
     //UART1_IM_R = UART_RIS_TXRIS;                     //enable the UART1 interrupt
     
@@ -197,6 +201,20 @@ void initTimer1()
     NVIC_EN0_R |= 1 << (INT_TIMER1A-16);             // turn-on interrupt 37 (TIMER1A)
     TIMER1_CTL_R |= TIMER_CTL_TAEN;                  // turn-on timer
     phase = 0;
+    
+}
+
+void initTimer0()
+{
+    TIMER0_CTL_R &= ~TIMER_CTL_TAEN;                // turn-off timer before reconfiguring
+    TIMER0_CFG_R = TIMER_CFG_32_BIT_TIMER;           // configure as 32-bit timer (A+B)
+    TIMER0_TAMR_R = TIMER_TAMR_TAMR_PERIOD;          // configure for periodic mode (count down)
+    TIMER0_TAILR_R = 0x1E8480;                       // set load value to 1B80 for interrupt every 176 us
+    
+    TIMER0_IMR_R = TIMER_IMR_TATOIM;                 // turn-on interrupts
+    NVIC_EN0_R |= 1 << (INT_TIMER0A-16);             // turn-on interrupt 37 (TIMER1A)
+    TIMER0_CTL_R |= TIMER_CTL_TAEN;                  // turn-on timer
+    
     
 }
 
@@ -393,6 +411,34 @@ void clearDmxData()
     ZERO_ANY_A(uint8_t, dmxData);
 }
 
+
+
+void timer0Isr()
+{
+    if (timeout==0)
+    {
+        GREEN_LED=0;
+    }
+    else
+    {
+        timeout--;
+    }
+    if (MODE==1)
+    {
+        if (timeout1==0)
+        {
+            GREEN_LED^=1;
+            timeout1=20;
+            
+        }
+        else
+        {
+            timeout1--;
+        }
+    }
+    TIMER0_ICR_R = TIMER_ICR_TATOCINT;                  //clear timer interrupt
+}
+
 void timer1Isr()
 {
     if (phase==0)               //when 176us has elapsed
@@ -430,6 +476,19 @@ void timer1Isr()
 }
 
 //UART interrupt handler
+void processCommand()
+{
+    if (rxData[deviceAddress-1]>0)
+    {
+        BLUE_LED=1;
+    }
+    else if (rxData[deviceAddress-1]==0)
+    {
+        BLUE_LED=0;
+    }
+}
+
+
 void uart1Isr()
 {
     if (UART1_MIS_R==UART_MIS_TXMIS)  //if the interrupt was triggered by UART TX
@@ -461,6 +520,9 @@ void uart1Isr()
         if((tempData & UART_DR_BE)==UART_DR_BE)
         {
             rxPhase=1;
+            processCommand();
+            timeout1=40;
+            GREEN_LED=1;
         }
         switch(rxPhase)
         {
@@ -498,6 +560,7 @@ int main(void)
     // Initialize hardware
     initHw();
     initEEPROM();
+    initTimer0();
     // EEPROMinit();
     clearDmxData();     //intialize the dmx data table to zero
     // initTimer1();       //intialize the timer settings
@@ -509,51 +572,55 @@ int main(void)
     putsUart0("Name  : Prabesh Khadka\nUTA ID: 1001201007\n");
     putsUart0("------------------------------------------------------------\n");
     putsUart0("Welcome to my project!!!\n\n");
-    if (MODE==1)
-    {
-        putsUart0("The MC is currently in DEVICE MODE!\n");
-    }
-    else if (MODE==0)
-    {
-        putsUart0("The MC is currently in CONTROLLER MODE\n");
-    }
     
-    if (glob==0)
-    {
-        putsUart0("The MC\n");
-        glob++;
-    }
     
     //step1
     //quickly flash the red and Green LED for 500ms  to check the LED are working
-    flashRedLed(500000);
-    waitMicrosecond(500000);
-    flashGreenLed(500000);
-    waitMicrosecond(500000);
+    //    flashRedLed(500000);
+    //    waitMicrosecond(500000);
+    //    flashGreenLed(500000);
+    //    waitMicrosecond(500000);
     //end of step1
+    RED_LED=1;
+    waitMicrosecond(500000);
+    RED_LED=0;
+    waitMicrosecond(500000);
     
     
     
-    
-    if ((SYSCTL_PREEPROM_R & SYSCTL_PREEPROM_R0))
-    {
-        putsUart0("Succes DAJU");
-    }
+    EEPROM_EEBLOCK_R &=0xFFFFFFFE;
+    EEPROM_EEOFFSET_R &=0xFFFFFFFE;
     EEPROM_EEBLOCK_R|=0x0;
-    EEPROM_EEOFFSET_R|=0x1;
+    EEPROM_EEOFFSET_R|=0x0;
     
-    if (EEPROM_EERDWR_R==0)
+    if (EEPROM_EERDWR_R==1)
     {
         putsUart0("Device");
+        MODE=1;
     }
-    
-    if (EEPROM_EERDWR_R==2)
+    EEPROM_EEBLOCK_R&=0xFFFFFFFE;
+    EEPROM_EEOFFSET_R&=0xFFFFFFFE;
+    EEPROM_EEBLOCK_R|=0x0;
+    EEPROM_EEOFFSET_R|=0x0;
+    if (EEPROM_EERDWR_R==0)
     {
         putsUart0("controller");
+        MODE=0;
     }
+    EEPROM_EEBLOCK_R&=0xFFFFFFFE;
+    EEPROM_EEOFFSET_R&=0xFFFFFFFE;
+    EEPROM_EEBLOCK_R|=0x0;
+    EEPROM_EEOFFSET_R|=0x1;
+    deviceAddress=EEPROM_EERDWR_R;
+    if (deviceAddress==32)
+    {
+        putsUart0("Hurray");
+    }
+    
     if (MODE==1)
     {
         initUart1RX();
+        
     }
     
     while(1)
@@ -569,7 +636,8 @@ int main(void)
         //step2
         putsUart0("$ ");
         getsUart0(uartString);
-        flashGreenLed(50000);       //blink green LED Request
+        GREEN_LED=1;
+        timeout=1;
         putsUart0(uartString);      //display to the screen for debug
         putsUart0("\n");
         //end of step 2
@@ -628,7 +696,7 @@ int main(void)
                 
             }
             
-            if(isCommand(uartString, pos, "get") && (fieldCount>1))      //get
+            if(isCommand(uartString, pos, "get") && (fieldCount==2))      //get
             {
                 putsUart0("The command that you entered was GET");
                 putsUart0("\n");
@@ -690,9 +758,11 @@ int main(void)
                 ON =0;
                 RED_LED=0;
                 MODE=1;
+                EEPROM_EEBLOCK_R&=0xFFFFFFFE;
+                EEPROM_EEOFFSET_R&=0xFFFFFFFE;
                 EEPROM_EEBLOCK_R|=0x0;
                 EEPROM_EEOFFSET_R|=0x0;
-                EEPROM_EERDWR_R=0;
+                EEPROM_EERDWR_R=1;
                 initUart1RX();
                 OK=true;
                 
@@ -705,12 +775,14 @@ int main(void)
                 putsUart0("The command that you entered was CONTROLLER");
                 putsUart0("\n");
                 MODE=0;
+                EEPROM_EEBLOCK_R&=0xFFFFFFFE;
+                EEPROM_EEOFFSET_R&=0xFFFFFFFE;
                 EEPROM_EEBLOCK_R|=0x0;
-                EEPROM_EEOFFSET_R|=0x1;
-                EEPROM_EERDWR_R=2;
+                EEPROM_EEOFFSET_R|=0x0;
+                EEPROM_EERDWR_R=0;
                 OK=true;
             }
-            if(isCommand(uartString, pos, "address") && (fieldCount>0))      //max command
+            if(isCommand(uartString, pos, "address") && (fieldCount==2))      //max command
             {
                 putsUart0("The command that you entered was ADDRESS");
                 putsUart0("\n");
@@ -723,6 +795,11 @@ int main(void)
                 else
                 {
                     deviceAddress=address;
+                    EEPROM_EEBLOCK_R&=0xFFFFFFFE;
+                    EEPROM_EEOFFSET_R&=0xFFFFFFFE;
+                    EEPROM_EEBLOCK_R|=0x0;
+                    EEPROM_EEOFFSET_R|=0x1;
+                    EEPROM_EERDWR_R=address;
                     OK=true;
                 }
                 
