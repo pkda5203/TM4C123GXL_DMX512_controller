@@ -77,6 +77,7 @@ uint16_t rxPhase;
 uint16_t glob=0;
 uint16_t timeout;
 uint16_t timeout1=1000;
+uint8_t SERVO =0;
 //-----------------------------------------------------------------------------
 // Subroutines
 //-----------------------------------------------------------------------------
@@ -86,7 +87,7 @@ uint16_t timeout1=1000;
 void initHw()
 {
     // Configure HW to work with 16 MHz XTAL, PLL enabled, system clock of 40 MHz
-    SYSCTL_RCC_R = SYSCTL_RCC_XTAL_16MHZ | SYSCTL_RCC_OSCSRC_MAIN | SYSCTL_RCC_USESYSDIV | (4 << SYSCTL_RCC_SYSDIV_S)| SYSCTL_RCC_USEPWMDIV | SYSCTL_RCC_PWMDIV_2;
+    SYSCTL_RCC_R = SYSCTL_RCC_XTAL_16MHZ | SYSCTL_RCC_OSCSRC_MAIN | SYSCTL_RCC_USESYSDIV | (4 << SYSCTL_RCC_SYSDIV_S)| SYSCTL_RCC_USEPWMDIV | SYSCTL_RCC_PWMDIV_16;
     
     // Set GPIO ports to use APB (not needed since default configuration -- for clarity)
     // Note UART on port A must use APB
@@ -107,30 +108,15 @@ void initHw()
     GPIO_PORTB_AFSEL_R |= 0x20; // select auxilary function for bit 5
     GPIO_PORTB_PCTL_R = GPIO_PCTL_PB5_M0PWM3; // enable PWM on bit 5
     
-    // Configure PWM module0 to drive RGB backlight
-    // RED   on M0PWM3 (PB5), M0PWM1b
-    // BLUE  on M0PWM4 (PE4), M0PWM2a
-    // GREEN on M0PWM5 (PE5), M0PWM2b
+    // Configure PWM module0 to drive RC servo
     SYSCTL_SRPWM_R = SYSCTL_SRPWM_R0;                // reset PWM0 module
     SYSCTL_SRPWM_R = 0;                              // leave reset state
-    PWM0_1_CTL_R = 0;                                // turn-off PWM0 generator 1
-    //   PWM0_2_CTL_R = 0;                                // turn-off PWM0 generator 2
+    PWM0_1_CTL_R = 0;                                // turn-off PWM0 generator 1                               // turn-off PWM0 generator 2
     PWM0_1_GENB_R = PWM_0_GENB_ACTCMPBD_ZERO | PWM_0_GENB_ACTLOAD_ONE;
-    // output 3 on PWM0, gen 1b, cmpb
-    //  PWM0_2_GENA_R = PWM_0_GENA_ACTCMPAD_ZERO | PWM_0_GENA_ACTLOAD_ONE;
-    // output 4 on PWM0, gen 2a, cmpa
-    //  PWM0_2_GENB_R = PWM_0_GENB_ACTCMPBD_ZERO | PWM_0_GENB_ACTLOAD_ONE;
-    // output 5 on PWM0, gen 2b, cmpb
-    PWM0_1_LOAD_R = 400000;                            // set period to 40 MHz sys clock / 2 / 1024 = 19.53125 kHz
-    //  PWM0_2_LOAD_R = 1024;
-    PWM0_INVERT_R |= PWM_INVERT_PWM3INV ;//| PWM_INVERT_PWM4INV | PWM_INVERT_PWM5INV;
-    // invert outputs so duty cycle increases with increasing compare values
-    PWM0_1_CMPB_R = 0;                               // red off (0=always low, 1023=always high)
-    // PWM0_2_CMPB_R = 0;                               // green off
-    //PWM0_2_CMPA_R = 0;                               // blue off
-    
+    PWM0_1_LOAD_R = 50000;                            // set period to 50 Hz
+    PWM0_INVERT_R |= PWM_INVERT_PWM3INV ;            // invert outputs so duty cycle increases with increasing compare values
+    PWM0_1_CMPB_R = 49999;                               // red off (0=always low, 1023=always high)
     PWM0_1_CTL_R = PWM_0_CTL_ENABLE;                 // turn-on PWM0 generator 1
-    //  PWM0_2_CTL_R = PWM_0_CTL_ENABLE;                 // turn-on PWM0 generator 2
     PWM0_ENABLE_R |= PWM_ENABLE_PWM3EN;// | PWM_ENABLE_PWM4EN | PWM_ENABLE_PWM5EN;
     // enable outputs
     
@@ -163,9 +149,9 @@ void initHw()
     
 }
 
-void setRgbColor(uint16_t red)
+void setServo(uint16_t input)
 {
-    PWM0_1_CMPB_R = red;
+    PWM0_1_CMPB_R = input;
     
 }
 
@@ -250,6 +236,19 @@ void initTimer0()
     TIMER0_CFG_R = TIMER_CFG_32_BIT_TIMER;           // configure as 32-bit timer (A+B)
     TIMER0_TAMR_R = TIMER_TAMR_TAMR_PERIOD;          // configure for periodic mode (count down)
     TIMER0_TAILR_R = 0x1E8480;                       // set load value to 1B80 for interrupt every 176 us
+    
+    TIMER0_IMR_R = TIMER_IMR_TATOIM;                 // turn-on interrupts
+    NVIC_EN0_R |= 1 << (INT_TIMER0A-16);             // turn-on interrupt 37 (TIMER1A)
+    TIMER0_CTL_R |= TIMER_CTL_TAEN;                  // turn-on timer
+    
+    
+}
+void initTimer3()
+{
+    TIMER3_CTL_R &= ~TIMER_CTL_TAEN;                // turn-off timer before reconfiguring
+    TIMER3_CFG_R = TIMER_CFG_32_BIT_TIMER;           // configure as 32-bit timer (A+B)
+    TIMER3_TAMR_R = TIMER_TAMR_TAMR_PERIOD;          // configure for periodic mode (count down)
+    TIMER3_TAILR_R = 0x1E8480;                       // set load value to 1B80 for interrupt every 176 us
     
     TIMER0_IMR_R = TIMER_IMR_TATOIM;                 // turn-on interrupts
     NVIC_EN0_R |= 1 << (INT_TIMER0A-16);             // turn-on interrupt 37 (TIMER1A)
@@ -409,15 +408,11 @@ bool isCommand(char str[], uint8_t pos[], char *cmd)
 uint16_t getValue (char str[], uint8_t pos[], uint8_t argNum)
 {
     uint16_t value = atoi(&str[*(pos+1+argNum)]);
-    //putsUart0(&str[*(pos+1+argNum)]);
-    // putsUart0("\n");
     return value;
 }
 
 char getString (char str[], uint8_t pos[], uint8_t argNum)
 {
-    //  putsUart0(&str[*(pos+1+argNum)]);
-    // putsUart0("\n");
     return (&str[*(pos+1+argNum)]);
 }
 
@@ -518,6 +513,13 @@ void timer1Isr()
 //UART interrupt handler
 void processCommand()
 {
+    if (SERVO==1)
+    {
+        uint16_t position = rxData[19]*25;
+        position = 6020 - position;
+        setServo(position);
+        
+    }
     if (rxData[deviceAddress-1]>0)
     {
         BLUE_LED=1;
@@ -526,6 +528,7 @@ void processCommand()
     {
         BLUE_LED=0;
     }
+    
 }
 
 
@@ -542,7 +545,6 @@ void uart1Isr()
         else
         {
             UART1_CTL_R =0;
-            //putsUart0("ISR 2 FIRED");
             
             while (UART1_FR_R & UART_FR_BUSY);
             if (ON==1)
@@ -554,15 +556,18 @@ void uart1Isr()
     }
     else    //if the interrupt was triggered by UART RX
     {
-        //  BLUE_LED=1;
-        
+        if (GREEN_LED==0)
+        {
+            GREEN_LED=1;
+        }
         tempData=UART1_DR_R;
         if((tempData & UART_DR_BE)==UART_DR_BE)
         {
+            
             rxPhase=1;
             processCommand();
             timeout1=40;
-            GREEN_LED=1;
+            // GREEN_LED=1;
         }
         switch(rxPhase)
         {
@@ -589,7 +594,6 @@ void uart1Isr()
         
     }
     UART1_ICR_R = UART_ICR_RXIC;
-    //GREEN_LED=1;
 }
 //-----------------------------------------------------------------------------
 // Main
@@ -615,17 +619,12 @@ int main(void)
     
     
     //step1
-    //quickly flash the red and Green LED for 500ms  to check the LED are working
-    //    flashRedLed(500000);
-    //    waitMicrosecond(500000);
-    //    flashGreenLed(500000);
-    //    waitMicrosecond(500000);
-    //end of step1
+    
     RED_LED=1;
     waitMicrosecond(500000);
     RED_LED=0;
     waitMicrosecond(500000);
-    
+    //end of step1
     
     
     EEPROM_EEBLOCK_R &=0xFFFFFFFE;
@@ -685,15 +684,6 @@ int main(void)
         //step 3
         fieldCount=parseCommand(uartString,pos,type);
         
-        //        //testing
-        //        for(i=0; i<fieldCount; i++)
-        //        {
-        //            putsUart0(&uartString[*(pos+i)]);
-        //            putsUart0("\n");
-        //        }
-        //        putsUart0("\n");
-        //testing end
-        //uint8_t hi = atoi(&uartString[*(pos+1)]);
         //end of step 3
         OK = false;
         
@@ -762,14 +752,6 @@ int main(void)
                 ON =1;
                 OK=true;
                 RED_LED=1;
-                setRgbColor(399200);
-                //s
-                //waitMicrosecond(1000000);
-                // setRgbColor(0);
-                //   waitMicrosecond(1000000);
-                //  setRgbColor(399);
-                // waitMicrosecond(1000000);
-                //                       setRgbColor(0);
                 initTimer1();
             }
             
@@ -779,8 +761,6 @@ int main(void)
                 putsUart0("\n");
                 ON =0;
                 RED_LED=0;
-                setRgbColor(400);
-                //     waitMicrosecond(1000000);
                 OK=true;
             }
             
@@ -798,6 +778,27 @@ int main(void)
                 {
                     OK=true;
                     maxM=address;
+                }
+                
+            }
+            if(isCommand(uartString, pos, "servo") && (fieldCount==2))      //max command
+            {
+                putsUart0("The command that you entered was MAX");
+                putsUart0("\n");
+                address= getValue(uartString, pos, 0);
+                if (!(address>=0 && address<=512))
+                {
+                    putsUart0("Invalid 0-512 required!");
+                    putsUart0("\n");
+                }
+                else
+                {
+                    SERVO=1;
+                    rxData[19]=address;
+                    processCommand();
+                    
+                    OK=true;
+                    
                 }
                 
             }
@@ -866,10 +867,6 @@ int main(void)
             putsUart0("Ready");
             putsUart0("\n");
         }
-        setRgbColor(400000);
-        //waitMicrosecond(1000000);
-        //  setRgbColor(10);
-        //end of step 4 and 5
         
         
     }
